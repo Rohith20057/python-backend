@@ -1,8 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
-
+from typing import List
 app = FastAPI()
 
 Mongodb_url = "mongodb://localhost:27017"
@@ -15,27 +15,39 @@ user_collection = db.users
 class User(BaseModel):
     name: str
     email : EmailStr
-        
+
+class UserOut(BaseModel):
+    id:str
+    name:str
+    email:str
+
 #convertion of objectid to string , specifically is to return mongodb data and fetch the users
 def convert_id(user) -> dict:
-    user['_id'] = str(user['_id'])
-    return user
+    return{
+    "id" : str(user["_id"]),
+    "name": user["name"],
+    "email": user["email"]
+    }
+
 
 #api end point starts here 
 @app.get("/")
 def home():
     return {"message": "Welcome to FastAPI with MongoDB"}
 
-@app.post("/users")
+@app.post("/users",status_code=201)
 async def create_users(user:User):
     
-    user_dict = user.dict()
+    existing_user = await user_collection.find_one({"email":user.email})
+
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already exists")
     
-    await user_collection.insert_one(user_dict)
+    await user_collection.insert_one(user.dict())
     
     return{"message": "User created successfully"}
 
-@app.get("/users")
+@app.get("/users",response_model=List[UserOut])
 async def get_users():
     
     #CREATE AN EMPTY LIST TO STORE THE USERS 
@@ -53,15 +65,31 @@ async def get_users():
 async def update_user(user_id: str, user: User):
     user_dict = user.dict()
     
-    await user_collection.update_one({"_id": ObjectId(user_id)}, #updating the id
+    result = await user_collection.update_one({"_id": ObjectId(user_id)}, #updating the id
                                      {"$set": user_dict}   #setting the new data
                                      )
-    return {"message": "User updated successfully"}
-
+    if result.matched_count==0:
+        raise HTTPException(status_code=404, detail="user not found to update the data")
+    else:
+        return {"message": "User updated successfully"}
 
 @app.delete("/users/{user_id}")
 async def delete_user(user_id: str):
-    await user_collection.delete_one({"_id": ObjectId(user_id)})
-    return {"message": "User deleted successfully"}
+    result=await user_collection.delete_one({"_id": ObjectId(user_id)})
+    if result.deleted_count ==0:
+        raise HTTPException(status_code=404, detail="user cant found to delete the user")
+    else:
+        return {"message": "User deleted successfully"}
 
 
+#now we have to get a single user by using ID:
+@app.get("/users/{user_id}",response_model=UserOut)
+async def get_single_user(user_id: str):
+    
+    user = await user_collection.find_one({"_id": ObjectId(user_id)})
+     
+    if not user:   
+        raise HTTPException(status_code=404, detail="user not found")
+    return convert_id(user)
+
+    
